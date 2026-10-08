@@ -1,0 +1,110 @@
+name: Military Map Video Engine
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Render mode"
+        required: true
+        default: "single"
+        type: choice
+        options:
+          - single
+          - batch30
+
+      matchup:
+        description: 'Single matchup, e.g. "Egypt vs Algeria"'
+        required: false
+        default: "Egypt vs Algeria"
+        type: string
+
+      limit:
+        description: "Maximum batch episodes"
+        required: true
+        default: "1"
+        type: string
+
+      start:
+        description: "Batch starting position"
+        required: true
+        default: "1"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+      ELEVENLABS_VOICE_ID: wuNTyg2ENDlpKsOnSevp
+      ELEVENLABS_MODEL_ID: eleven_multilingual_v2
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg unzip
+
+      - name: Extract V9 engine
+        run: |
+          mkdir -p engine
+          unzip -q military-map-video-engine-v9.zip -d engine
+
+      - name: Locate engine
+        run: |
+          find engine -maxdepth 3 -type f -name package.json -print
+
+      - name: Install Node dependencies
+        working-directory: engine/military-map-v4
+        run: npm install
+
+      - name: Render single matchup
+        if: ${{ inputs.mode == 'single' }}
+        working-directory: engine/military-map-v4
+        run: |
+          npm run oneclick -- "${{ inputs.matchup }}"
+
+      - name: Render 30-matchup batch
+        if: ${{ inputs.mode == 'batch30' }}
+        working-directory: engine/military-map-v4
+        run: |
+          npm run batch30 -- \
+            --start="${{ inputs.start }}" \
+            --limit="${{ inputs.limit }}" \
+            --stop-on-error
+
+      - name: Collect results
+        if: always()
+        working-directory: engine/military-map-v4
+        run: |
+          mkdir -p workflow-output
+
+          if [ -f output/final.mp4 ]; then
+            cp output/final.mp4 workflow-output/
+          fi
+
+          if [ -f output/batch-30/manifest.json ]; then
+            cp output/batch-30/manifest.json workflow-output/
+          fi
+
+          find output/batch-30 \
+            -name "*.mp4" \
+            -exec cp {} workflow-output/ \; 2>/dev/null || true
+
+      - name: Upload rendered videos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: military-map-render-${{ github.run_number }}
+          path: engine/military-map-v4/workflow-output/
+          if-no-files-found: warn
+          retention-days: 7
